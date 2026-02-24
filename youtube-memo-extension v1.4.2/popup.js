@@ -114,9 +114,10 @@ async function fetchVideoMeta(videoId) {
 
 function saveMemo(videoId, memoText, time) {
   chrome.storage.local.get([videoId], async (result) => {
-    let existing = result[videoId];
+    const normalized = normalizeMemoData(videoId, result[videoId]);
+    let existing = normalized;
 
-    if (!existing || typeof existing === "string") {
+    if (!existing) {
       const meta = await fetchVideoMeta(videoId);
       existing = {
         title: meta.title,
@@ -126,11 +127,10 @@ function saveMemo(videoId, memoText, time) {
       };
     }
 
-    if (!existing.memos) {
-      existing.memos = [];
-    }
-
-    existing.memos.push({ time, text: memoText });
+    existing.memos.push({
+      time: Number.isFinite(time) ? Math.max(0, Math.floor(time)) : 0,
+      text: memoText
+    });
 
     chrome.storage.local.set({ [videoId]: existing }, () => {
       document.getElementById("memoInput").value = "";
@@ -149,10 +149,18 @@ document.getElementById("saveBaseMemoBtn").addEventListener("click", () => {
 /* 시간 메모 */
 function getCurrentVideoTime(callback) {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (!tabs[0]?.id) {
+      callback(0);
+      return;
+    }
+
     chrome.tabs.sendMessage(tabs[0].id, { type: "GET_TIME" }, (response) => {
-      if (response && response.time !== undefined) {
-        callback(Math.floor(response.time));
+      if (chrome.runtime.lastError || !response || response.time === undefined) {
+        callback(0);
+        return;
       }
+
+      callback(Math.max(0, Math.floor(response.time)));
     });
   });
 }
