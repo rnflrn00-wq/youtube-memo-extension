@@ -215,7 +215,8 @@ function saveMemo(videoId, memoText, time, options = {}) {
 
     chrome.storage.local.set({ [videoId]: existing }, () => {
       document.getElementById("memoInput").value = "";
-      loadMemoList();
+      initMemoVisibilityToggle();
+loadMemoList();
     });
   });
 }
@@ -358,11 +359,11 @@ function loadMemoList() {
     allData = data;
     renderList(document.getElementById("searchInput")?.value?.toLowerCase() || "");
   });
-}
+});
 
-function renderList(filterText) {
-  const list = document.getElementById("memoList");
-  list.innerHTML = "";
+document.getElementById("restoreInput").addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
 
   const grouped = groupedByChannel();
 
