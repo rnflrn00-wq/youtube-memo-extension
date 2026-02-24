@@ -6,6 +6,8 @@ function getVideoId() {
 function removeExistingMemo() {
   const existing = document.getElementById("yt-memo-box");
   if (existing) existing.remove();
+  popupBox = null;
+  timeContainer = null;
 }
 
 let popupBox = null;
@@ -13,6 +15,37 @@ let timeContainer = null;
 let shownBase = false;
 let activeTimes = {};
 let closedByUser = false;
+let lastMouse = { x: 20, y: 20 };
+
+function isFullscreenMode() {
+  return Boolean(document.fullscreenElement);
+}
+
+function getCursorAnchorPosition() {
+  const offset = 2;
+  const width = 280;
+  const height = 220;
+
+  const left = Math.min(lastMouse.x + offset, window.innerWidth - width - 8);
+  const top = Math.min(lastMouse.y + offset, window.innerHeight - height - 8);
+
+  return {
+    left: Math.max(8, left),
+    top: Math.max(8, top)
+  };
+}
+
+function syncPopupPosition() {
+  if (!popupBox) return;
+  const { left, top } = getCursorAnchorPosition();
+  popupBox.style.left = `${left}px`;
+  popupBox.style.top = `${top}px`;
+}
+
+function syncPopupVisibilityForFullscreen() {
+  if (!popupBox) return;
+  popupBox.style.display = isFullscreenMode() ? "none" : "block";
+}
 
 function createBasePopup(baseText, titleText = "📌 Saved Memo") {
   removeExistingMemo();
@@ -22,16 +55,15 @@ function createBasePopup(baseText, titleText = "📌 Saved Memo") {
 
   Object.assign(popupBox.style, {
     position: "fixed",
-    top: "80px",
-    right: "20px",
     background: "#111",
     color: "#fff",
-    padding: "14px",
+    padding: "12px",
     width: "260px",
     borderRadius: "8px",
     zIndex: "99999",
     boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-    fontSize: "14px"
+    fontSize: "13px",
+    pointerEvents: "none"
   });
 
   const baseContainer = document.createElement("div");
@@ -42,21 +74,14 @@ function createBasePopup(baseText, titleText = "📌 Saved Memo") {
 
   timeContainer = document.createElement("div");
   timeContainer.id = "yt-time-container";
-  timeContainer.style.marginTop = "8px";
-
-  const closeBtn = document.createElement("button");
-  closeBtn.innerText = "닫기";
-  closeBtn.style.marginTop = "8px";
-  closeBtn.onclick = () => {
-    closedByUser = true;
-    popupBox.remove();
-  };
+  timeContainer.style.marginTop = "6px";
 
   popupBox.appendChild(baseContainer);
   popupBox.appendChild(timeContainer);
-  popupBox.appendChild(closeBtn);
 
   document.body.appendChild(popupBox);
+  syncPopupPosition();
+  syncPopupVisibilityForFullscreen();
 }
 
 function showTimeInsidePopup(text) {
@@ -89,7 +114,6 @@ function getNormalizedMemos(data) {
   }
   return [];
 }
-
 
 function ensurePopupForMemos(memos) {
   const base = memos.find(m => m.time === 0);
@@ -134,6 +158,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (currentId && targetId && currentId === targetId) {
       forceShowMemoPopup(targetId);
     }
+    return;
+  }
+
+  if (request.type === "SEEK_TO") {
+    const video = document.querySelector("video");
+    if (!video) {
+      sendResponse({ ok: false });
+      return;
+    }
+
+    const nextTime = Number.isFinite(request.time) ? Math.max(0, request.time) : 0;
+    video.currentTime = nextTime;
+    video.play().catch(() => {});
+    sendResponse({ ok: true });
   }
 });
 
@@ -161,26 +199,39 @@ function checkMemos() {
       return;
     }
 
-    if (!shownBase && !closedByUser) {
-      ensurePopupForMemos(memos);
+    const baseMemo = memos.find(m => m.time === 0);
+    if (baseMemo && !shownBase && !closedByUser) {
+      shownBase = true;
+      createBasePopup(baseMemo.text, "📌 Saved Memo");
     }
 
     const currentTime = Math.floor(video.currentTime);
+    const matchedTimeMemos = memos
+      .map((m, index) => ({ ...m, index }))
+      .filter(m => m.time > 0 && Math.abs(m.time - currentTime) <= 1);
 
-    memos.forEach(m => {
+    if (!popupBox && !closedByUser && matchedTimeMemos.length > 0) {
+      if (baseMemo) {
+        shownBase = true;
+        createBasePopup(baseMemo.text, "📌 Saved Memo");
+      } else {
+        shownBase = true;
+        createBasePopup("기본 메모 없이 시간 메모만 등록된 영상입니다.", "⏱ Time Memo Only");
+      }
+    }
+
+    memos.forEach((m, index) => {
       if (m.time > 0) {
-        const diff = Math.abs(m.time - currentTime);
-        if (diff <= 1) {
-          if (!activeTimes[m.time]) {
-            if (!popupBox && !closedByUser) {
-              ensurePopupForMemos(memos);
-            }
+        const memoKey = `${m.time}-${index}`;
+        const isMatched = Math.abs(m.time - currentTime) <= 1;
 
-            activeTimes[m.time] = true;
+        if (isMatched) {
+          if (!activeTimes[memoKey]) {
+            activeTimes[memoKey] = true;
             showTimeInsidePopup(`⏱ ${m.text}`);
           }
         } else {
-          activeTimes[m.time] = false;
+          activeTimes[memoKey] = false;
         }
       }
     });
@@ -201,5 +252,14 @@ new MutationObserver(() => {
     setTimeout(checkMemos, 500);
   }
 }).observe(document, { subtree: true, childList: true });
+
+document.addEventListener("mousemove", (event) => {
+  lastMouse = { x: event.clientX, y: event.clientY };
+  syncPopupPosition();
+});
+
+document.addEventListener("fullscreenchange", () => {
+  syncPopupVisibilityForFullscreen();
+});
 
 checkMemos();
