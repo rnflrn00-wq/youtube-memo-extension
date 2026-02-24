@@ -15,37 +15,6 @@ let timeContainer = null;
 let shownBase = false;
 let activeTimes = {};
 let closedByUser = false;
-let lastMouse = { x: 20, y: 20 };
-
-function isFullscreenMode() {
-  return Boolean(document.fullscreenElement);
-}
-
-function getCursorAnchorPosition() {
-  const offset = 2;
-  const width = 280;
-  const height = 220;
-
-  const left = Math.min(lastMouse.x + offset, window.innerWidth - width - 8);
-  const top = Math.min(lastMouse.y + offset, window.innerHeight - height - 8);
-
-  return {
-    left: Math.max(8, left),
-    top: Math.max(8, top)
-  };
-}
-
-function syncPopupPosition() {
-  if (!popupBox) return;
-  const { left, top } = getCursorAnchorPosition();
-  popupBox.style.left = `${left}px`;
-  popupBox.style.top = `${top}px`;
-}
-
-function syncPopupVisibilityForFullscreen() {
-  if (!popupBox) return;
-  popupBox.style.display = isFullscreenMode() ? "none" : "block";
-}
 
 function createBasePopup(baseText, titleText = "📌 Saved Memo") {
   removeExistingMemo();
@@ -74,14 +43,31 @@ function createBasePopup(baseText, titleText = "📌 Saved Memo") {
 
   timeContainer = document.createElement("div");
   timeContainer.id = "yt-time-container";
-  timeContainer.style.marginTop = "6px";
+  timeContainer.style.marginTop = "8px";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.innerText = "닫기";
+  closeBtn.style.marginTop = "8px";
+  closeBtn.onclick = () => {
+    closedByUser = true;
+    popupBox.remove();
+  };
 
   popupBox.appendChild(baseContainer);
   popupBox.appendChild(timeContainer);
 
   document.body.appendChild(popupBox);
-  syncPopupPosition();
   syncPopupVisibilityForFullscreen();
+}
+
+
+function isFullscreenMode() {
+  return Boolean(document.fullscreenElement);
+}
+
+function syncPopupVisibilityForFullscreen() {
+  if (!popupBox) return;
+  popupBox.style.display = isFullscreenMode() ? "none" : "block";
 }
 
 function showTimeInsidePopup(text) {
@@ -114,6 +100,7 @@ function getNormalizedMemos(data) {
   }
   return [];
 }
+
 
 function ensurePopupForMemos(memos) {
   const base = memos.find(m => m.time === 0);
@@ -205,22 +192,20 @@ function checkMemos() {
 
     const currentTime = Math.floor(video.currentTime);
 
-    memos.forEach((m, index) => {
+    memos.forEach(m => {
       if (m.time > 0) {
         const diff = Math.abs(m.time - currentTime);
-        const memoKey = `${m.time}-${index}`;
-
         if (diff <= 1) {
-          if (!activeTimes[memoKey]) {
+          if (!activeTimes[m.time]) {
             if (!popupBox && !closedByUser) {
               ensurePopupForMemos(memos);
             }
 
-            activeTimes[memoKey] = true;
+            activeTimes[m.time] = true;
             showTimeInsidePopup(`⏱ ${m.text}`);
           }
         } else {
-          activeTimes[memoKey] = false;
+          activeTimes[m.time] = false;
         }
       }
     });
@@ -242,10 +227,6 @@ new MutationObserver(() => {
   }
 }).observe(document, { subtree: true, childList: true });
 
-document.addEventListener("mousemove", (event) => {
-  lastMouse = { x: event.clientX, y: event.clientY };
-  syncPopupPosition();
-});
 
 document.addEventListener("fullscreenchange", () => {
   syncPopupVisibilityForFullscreen();
