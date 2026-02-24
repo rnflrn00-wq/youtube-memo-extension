@@ -50,33 +50,6 @@ function sendShowPopupMessage(tabId, videoId) {
   }, 350);
 }
 
-
-function seekVideoInTab(tabId, time, fallbackUrl) {
-  if (!tabId) return;
-
-  const safeTime = Number.isFinite(time) ? Math.max(0, Math.floor(time)) : 0;
-  const sendSeek = () => {
-    chrome.tabs.sendMessage(tabId, { type: "SEEK_TO", time: safeTime }, (response) => {
-      if (!chrome.runtime.lastError && response && response.ok) {
-        return;
-      }
-
-      chrome.tabs.update(tabId, { url: fallbackUrl, active: true });
-    });
-  };
-
-  chrome.scripting.executeScript(
-    { target: { tabId }, files: ["content.js"] },
-    () => {
-      if (chrome.runtime.lastError) {
-        chrome.tabs.update(tabId, { url: fallbackUrl, active: true });
-        return;
-      }
-      sendSeek();
-    }
-  );
-}
-
 function smartOpenVideo(videoId, options = {}) {
   chrome.tabs.query({}, (tabs) => {
     const existingTab = tabs.find(t => t.url && t.url.includes(`watch?v=${videoId}`));
@@ -100,9 +73,7 @@ function smartOpenVideoAtTime(videoId, time) {
     const targetUrl = `https://www.youtube.com/watch?v=${videoId}&t=${safeTime}s`;
 
     if (existingTab) {
-      chrome.tabs.update(existingTab.id, { active: true }, () => {
-        seekVideoInTab(existingTab.id, safeTime, targetUrl);
-      });
+      chrome.tabs.update(existingTab.id, { url: targetUrl, active: true });
     } else {
       chrome.tabs.create({ url: targetUrl });
     }
