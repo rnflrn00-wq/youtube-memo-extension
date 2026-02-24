@@ -1,3 +1,5 @@
+const MEMO_DISPLAY_KEY = "__memoDisplayEnabled";
+
 function getVideoId() {
   const match = location.search.match(/[?&]v=([^&]+)/);
   return match ? match[1] : null;
@@ -15,39 +17,36 @@ let timeContainer = null;
 let shownBase = false;
 let activeTimes = {};
 let closedByUser = false;
+let displayEnabled = true;
 let lastMouse = { x: 20, y: 20 };
 
 function isFullscreenMode() {
   return Boolean(document.fullscreenElement);
 }
 
-function getCursorAnchorPosition() {
-  const offset = 2;
-  const width = 280;
-  const height = 220;
-
-  const left = Math.min(lastMouse.x + offset, window.innerWidth - width - 8);
-  const top = Math.min(lastMouse.y + offset, window.innerHeight - height - 8);
-
-  return {
-    left: Math.max(8, left),
-    top: Math.max(8, top)
-  };
+function isNearViewportEdge() {
+  return (
+    lastMouse.x <= 4 ||
+    lastMouse.y <= 4 ||
+    lastMouse.x >= window.innerWidth - 4 ||
+    lastMouse.y >= window.innerHeight - 4
+  );
 }
 
 function syncPopupPosition() {
   if (!popupBox) return;
-  const { left, top } = getCursorAnchorPosition();
-  popupBox.style.left = `${left}px`;
-  popupBox.style.top = `${top}px`;
+  popupBox.style.left = `${lastMouse.x + 4}px`;
+  popupBox.style.top = `${lastMouse.y + 4}px`;
 }
 
-function syncPopupVisibilityForFullscreen() {
+function syncPopupVisibilityState() {
   if (!popupBox) return;
-  popupBox.style.display = isFullscreenMode() ? "none" : "block";
+
+  const shouldHide = isFullscreenMode() || !displayEnabled || isNearViewportEdge() || closedByUser;
+  popupBox.style.opacity = shouldHide ? "0" : "1";
 }
 
-function createBasePopup(baseText, titleText = "📌 Saved Memo") {
+function createBasePopup(baseText) {
   removeExistingMemo();
 
   popupBox = document.createElement("div");
@@ -55,49 +54,62 @@ function createBasePopup(baseText, titleText = "📌 Saved Memo") {
 
   Object.assign(popupBox.style, {
     position: "fixed",
-    background: "#111",
-    color: "#fff",
-    padding: "12px",
-    width: "260px",
-    borderRadius: "8px",
     zIndex: "99999",
-    boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
     fontSize: "13px",
-    pointerEvents: "none"
+    pointerEvents: "none",
+    opacity: "0",
+    transition: "opacity 0.2s ease"
   });
 
-  const baseContainer = document.createElement("div");
-  baseContainer.innerHTML = `
-    <div style="font-weight:bold;margin-bottom:6px;">${titleText}</div>
-    <div style="margin-bottom:8px;">${baseText}</div>
-  `;
+  if (baseText) {
+    const mainText = document.createElement("div");
+    Object.assign(mainText.style, {
+      color: "#fff",
+      background: "rgba(0,0,0,0.72)",
+      padding: "6px 10px",
+      borderRadius: "4px",
+      width: "fit-content",
+      maxWidth: "260px",
+      marginBottom: "4px"
+    });
+    mainText.innerText = baseText;
+    popupBox.appendChild(mainText);
+  }
 
   timeContainer = document.createElement("div");
   timeContainer.id = "yt-time-container";
-  timeContainer.style.marginTop = "6px";
-
-  popupBox.appendChild(baseContainer);
   popupBox.appendChild(timeContainer);
 
   document.body.appendChild(popupBox);
   syncPopupPosition();
-  syncPopupVisibilityForFullscreen();
+  syncPopupVisibilityState();
 }
 
 function showTimeInsidePopup(text) {
   if (!timeContainer) return;
 
   const item = document.createElement("div");
-  item.style.background = "#222";
-  item.style.padding = "6px";
-  item.style.marginTop = "6px";
-  item.style.borderRadius = "4px";
+  Object.assign(item.style, {
+    color: "rgba(255,255,255,0.8)",
+    background: "rgba(0,0,0,0.72)",
+    padding: "6px 10px",
+    borderRadius: "4px",
+    width: "fit-content",
+    maxWidth: "260px",
+    marginTop: "4px",
+    opacity: "0",
+    transition: "opacity 0.2s ease"
+  });
   item.innerText = text;
 
   timeContainer.appendChild(item);
+  requestAnimationFrame(() => {
+    item.style.opacity = "1";
+  });
 
   setTimeout(() => {
-    item.remove();
+    item.style.opacity = "0";
+    setTimeout(() => item.remove(), 200);
   }, 3000);
 }
 
@@ -119,14 +131,14 @@ function ensurePopupForMemos(memos) {
   const base = memos.find(m => m.time === 0);
   if (base) {
     shownBase = true;
-    createBasePopup(base.text, "📌 Saved Memo");
+    createBasePopup(base.text);
     return;
   }
 
   const firstTimeMemo = memos.find(m => m.time > 0);
   if (firstTimeMemo) {
     shownBase = true;
-    createBasePopup("기본 메모 없이 시간 메모만 등록된 영상입니다.", "⏱ Time Memo Only");
+    createBasePopup("기본 메모 없이 시간 메모만 등록된 영상입니다.");
   }
 }
 
@@ -144,11 +156,7 @@ function forceShowMemoPopup(videoId) {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === "GET_TIME") {
     const video = document.querySelector("video");
-    if (video) {
-      sendResponse({ time: video.currentTime });
-      return;
-    }
-    sendResponse({ time: 0 });
+    sendResponse({ time: video ? video.currentTime : 0 });
     return;
   }
 
@@ -172,6 +180,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     video.currentTime = nextTime;
     video.play().catch(() => {});
     sendResponse({ ok: true });
+    return;
+  }
+
+  if (request.type === "MEMO_VISIBILITY_CHANGED") {
+    displayEnabled = Boolean(request.enabled);
+    syncPopupVisibilityState();
   }
 });
 
@@ -188,7 +202,9 @@ function checkMemos() {
     return;
   }
 
-  chrome.storage.local.get([videoId], (result) => {
+  chrome.storage.local.get([videoId, MEMO_DISPLAY_KEY], (result) => {
+    displayEnabled = result[MEMO_DISPLAY_KEY] !== false;
+
     const data = result[videoId];
     const memos = getNormalizedMemos(data);
 
@@ -202,7 +218,7 @@ function checkMemos() {
     const baseMemo = memos.find(m => m.time === 0);
     if (baseMemo && !shownBase && !closedByUser) {
       shownBase = true;
-      createBasePopup(baseMemo.text, "📌 Saved Memo");
+      createBasePopup(baseMemo.text);
     }
 
     const currentTime = Math.floor(video.currentTime);
@@ -213,10 +229,10 @@ function checkMemos() {
     if (!popupBox && !closedByUser && matchedTimeMemos.length > 0) {
       if (baseMemo) {
         shownBase = true;
-        createBasePopup(baseMemo.text, "📌 Saved Memo");
+        createBasePopup(baseMemo.text);
       } else {
         shownBase = true;
-        createBasePopup("기본 메모 없이 시간 메모만 등록된 영상입니다.", "⏱ Time Memo Only");
+        createBasePopup("기본 메모 없이 시간 메모만 등록된 영상입니다.");
       }
     }
 
@@ -235,6 +251,8 @@ function checkMemos() {
         }
       }
     });
+
+    syncPopupVisibilityState();
   });
 }
 
@@ -256,10 +274,11 @@ new MutationObserver(() => {
 document.addEventListener("mousemove", (event) => {
   lastMouse = { x: event.clientX, y: event.clientY };
   syncPopupPosition();
+  syncPopupVisibilityState();
 });
 
 document.addEventListener("fullscreenchange", () => {
-  syncPopupVisibilityForFullscreen();
+  syncPopupVisibilityState();
 });
 
 checkMemos();

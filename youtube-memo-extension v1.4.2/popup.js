@@ -1,3 +1,5 @@
+const MEMO_DISPLAY_KEY = "__memoDisplayEnabled";
+
 function getVideoIdFromUrl(url) {
   const match = url.match(/[?&]v=([^&]+)/);
   return match ? match[1] : null;
@@ -109,6 +111,34 @@ function smartOpenVideoAtTime(videoId, time) {
   });
 }
 
+
+function notifyActiveTabMemoVisibility(enabled) {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tabId = tabs[0]?.id;
+    if (!tabId) return;
+
+    chrome.tabs.sendMessage(tabId, { type: "MEMO_VISIBILITY_CHANGED", enabled }, () => {
+      void chrome.runtime.lastError;
+    });
+  });
+}
+
+function initMemoVisibilityToggle() {
+  const toggle = document.getElementById("memoVisibleToggle");
+  if (!toggle) return;
+
+  chrome.storage.local.get([MEMO_DISPLAY_KEY], (result) => {
+    toggle.checked = result[MEMO_DISPLAY_KEY] !== false;
+  });
+
+  toggle.addEventListener("change", (e) => {
+    const enabled = Boolean(e.target.checked);
+    chrome.storage.local.set({ [MEMO_DISPLAY_KEY]: enabled }, () => {
+      notifyActiveTabMemoVisibility(enabled);
+    });
+  });
+}
+
 let currentVideoId = null;
 let allData = {};
 
@@ -164,7 +194,8 @@ function saveMemo(videoId, memoText, time) {
 
     chrome.storage.local.set({ [videoId]: existing }, () => {
       document.getElementById("memoInput").value = "";
-      loadMemoList();
+      initMemoVisibilityToggle();
+loadMemoList();
     });
   });
 }
@@ -404,4 +435,5 @@ function renderList(filterText) {
     });
 }
 
+initMemoVisibilityToggle();
 loadMemoList();
