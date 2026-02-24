@@ -215,7 +215,8 @@ function saveMemo(videoId, memoText, time, options = {}) {
 
     chrome.storage.local.set({ [videoId]: existing }, () => {
       document.getElementById("memoInput").value = "";
-      loadMemoList();
+      initMemoVisibilityToggle();
+loadMemoList();
     });
   });
 }
@@ -358,11 +359,7 @@ function loadMemoList() {
     allData = data;
     renderList(document.getElementById("searchInput")?.value?.toLowerCase() || "");
   });
-}
-
-function renderList(filterText) {
-  const list = document.getElementById("memoList");
-  list.innerHTML = "";
+});
 
   const grouped = groupedByChannel();
 
