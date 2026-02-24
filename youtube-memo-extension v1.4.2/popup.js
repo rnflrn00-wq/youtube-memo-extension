@@ -4,9 +4,39 @@ function getVideoIdFromUrl(url) {
 }
 
 function formatTime(seconds) {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
+  const safeSeconds = Math.max(0, Number.isFinite(seconds) ? Math.floor(seconds) : 0);
+  const m = Math.floor(safeSeconds / 60);
+  const s = safeSeconds % 60;
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+}
+
+function normalizeMemoData(videoId, rawData) {
+  if (rawData && typeof rawData === "object") {
+    return {
+      title: typeof rawData.title === "string" ? rawData.title : videoId,
+      channel: typeof rawData.channel === "string" ? rawData.channel : "Unknown Channel",
+      thumbnail: typeof rawData.thumbnail === "string"
+        ? rawData.thumbnail
+        : `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+      memos: Array.isArray(rawData.memos)
+        ? rawData.memos.filter(m => m && typeof m.text === "string").map(m => ({
+            time: Number.isFinite(m.time) ? Math.max(0, Math.floor(m.time)) : 0,
+            text: m.text
+          }))
+        : []
+    };
+  }
+
+  if (typeof rawData === "string" && rawData.trim()) {
+    return {
+      title: videoId,
+      channel: "Unknown Channel",
+      thumbnail: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+      memos: [{ time: 0, text: rawData.trim() }]
+    };
+  }
+
+  return null;
 }
 
 function smartOpenVideo(videoId) {
@@ -50,7 +80,7 @@ let currentVideoId = null;
 let allData = {};
 
 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-  const url = tabs[0].url;
+  const url = tabs[0]?.url || "";
   currentVideoId = getVideoIdFromUrl(url);
 
   const label = document.getElementById("currentVideo");
@@ -152,7 +182,8 @@ function renderList(filterText) {
   list.innerHTML = "";
 
   Object.keys(allData).forEach(videoId => {
-    let itemData = allData[videoId];
+    const itemData = normalizeMemoData(videoId, allData[videoId]);
+    if (!itemData) return;
 
     const { title, thumbnail, memos = [] } = itemData;
 
