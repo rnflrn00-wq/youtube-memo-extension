@@ -361,10 +361,6 @@ function loadMemoList() {
   });
 });
 
-document.getElementById("restoreInput").addEventListener("change", (event) => {
-  const file = event.target.files?.[0];
-  if (!file) return;
-
   const grouped = groupedByChannel();
 
   Object.keys(grouped)

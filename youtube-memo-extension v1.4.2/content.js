@@ -1,3 +1,8 @@
+if (window.__YT_MEMO_SCRIPT_LOADED__) {
+  // prevent duplicate listeners/intervals when content.js is injected again
+} else {
+  window.__YT_MEMO_SCRIPT_LOADED__ = true;
+
 const MEMO_DISPLAY_KEY = "__memoDisplayEnabled";
 
 function getVideoId() {
@@ -259,3 +264,5 @@ document.addEventListener("fullscreenchange", () => {
 });
 
 checkMemos();
+
+}
