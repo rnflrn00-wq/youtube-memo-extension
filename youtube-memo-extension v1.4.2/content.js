@@ -6,6 +6,8 @@ function getVideoId() {
 function removeExistingMemo() {
   const existing = document.getElementById("yt-memo-box");
   if (existing) existing.remove();
+  popupBox = null;
+  timeContainer = null;
 }
 
 let popupBox = null;
@@ -22,16 +24,15 @@ function createBasePopup(baseText, titleText = "📌 Saved Memo") {
 
   Object.assign(popupBox.style, {
     position: "fixed",
-    top: "80px",
-    right: "20px",
     background: "#111",
     color: "#fff",
-    padding: "14px",
+    padding: "12px",
     width: "260px",
     borderRadius: "8px",
     zIndex: "99999",
     boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-    fontSize: "14px"
+    fontSize: "13px",
+    pointerEvents: "none"
   });
 
   const baseContainer = document.createElement("div");
@@ -54,7 +55,6 @@ function createBasePopup(baseText, titleText = "📌 Saved Memo") {
 
   popupBox.appendChild(baseContainer);
   popupBox.appendChild(timeContainer);
-  popupBox.appendChild(closeBtn);
 
   document.body.appendChild(popupBox);
   syncPopupVisibilityForFullscreen();
