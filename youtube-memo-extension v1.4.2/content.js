@@ -10,11 +10,11 @@ function removeExistingMemo() {
 
 let popupBox = null;
 let timeContainer = null;
+let shownBase = false;
+let activeTimes = {};
+let closedByUser = false;
 
-/* ===========================
-   기본 팝업 생성
-=========================== */
-function createBasePopup(baseText) {
+function createBasePopup(baseText, titleText = "📌 Saved Memo") {
   removeExistingMemo();
 
   popupBox = document.createElement("div");
@@ -34,14 +34,12 @@ function createBasePopup(baseText) {
     fontSize: "14px"
   });
 
-  /* 컨테이너1: 기본메모 */
   const baseContainer = document.createElement("div");
   baseContainer.innerHTML = `
-    <div style="font-weight:bold;margin-bottom:6px;">📌 Saved Memo</div>
+    <div style="font-weight:bold;margin-bottom:6px;">${titleText}</div>
     <div style="margin-bottom:8px;">${baseText}</div>
   `;
 
-  /* 컨테이너2: 시간메모 영역 */
   timeContainer = document.createElement("div");
   timeContainer.id = "yt-time-container";
   timeContainer.style.marginTop = "8px";
@@ -49,7 +47,10 @@ function createBasePopup(baseText) {
   const closeBtn = document.createElement("button");
   closeBtn.innerText = "닫기";
   closeBtn.style.marginTop = "8px";
-  closeBtn.onclick = () => popupBox.remove();
+  closeBtn.onclick = () => {
+    closedByUser = true;
+    popupBox.remove();
+  };
 
   popupBox.appendChild(baseContainer);
   popupBox.appendChild(timeContainer);
@@ -58,9 +59,6 @@ function createBasePopup(baseText) {
   document.body.appendChild(popupBox);
 }
 
-/* ===========================
-   시간 메모 내부 표시 (3초)
-=========================== */
 function showTimeInsidePopup(text) {
   if (!timeContainer) return;
 
@@ -78,58 +76,110 @@ function showTimeInsidePopup(text) {
   }, 3000);
 }
 
-/* ===========================
-   GET_TIME 유지
-=========================== */
+function getNormalizedMemos(data) {
+  if (!data) return [];
+  if (Array.isArray(data.memos)) {
+    return data.memos.filter(m => m && typeof m.text === "string").map(m => ({
+      time: Number.isFinite(m.time) ? Math.max(0, Math.floor(m.time)) : 0,
+      text: m.text
+    }));
+  }
+  if (typeof data === "string" && data.trim()) {
+    return [{ time: 0, text: data.trim() }];
+  }
+  return [];
+}
+
+
+function ensurePopupForMemos(memos) {
+  const base = memos.find(m => m.time === 0);
+  if (base) {
+    shownBase = true;
+    createBasePopup(base.text, "📌 Saved Memo");
+    return;
+  }
+
+  const firstTimeMemo = memos.find(m => m.time > 0);
+  if (firstTimeMemo) {
+    shownBase = true;
+    createBasePopup("기본 메모 없이 시간 메모만 등록된 영상입니다.", "⏱ Time Memo Only");
+  }
+}
+
+function forceShowMemoPopup(videoId) {
+  chrome.storage.local.get([videoId], (result) => {
+    const data = result[videoId];
+    const memos = getNormalizedMemos(data);
+    if (!memos.length) return;
+
+    closedByUser = false;
+    ensurePopupForMemos(memos);
+  });
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === "GET_TIME") {
     const video = document.querySelector("video");
     if (video) {
       sendResponse({ time: video.currentTime });
+      return;
+    }
+    sendResponse({ time: 0 });
+    return;
+  }
+
+  if (request.type === "SHOW_MEMO_POPUP") {
+    const currentId = getVideoId();
+    const targetId = request.videoId || currentId;
+    if (currentId && targetId && currentId === targetId) {
+      forceShowMemoPopup(targetId);
     }
   }
 });
 
-/* ===========================
-   재노출 가능 구조
-=========================== */
-
-let shownBase = false;
-let activeTimes = {}; // 핵심 변경점
-
 function checkMemos() {
   const video = document.querySelector("video");
-  if (!video) return;
+  if (!video) {
+    removeExistingMemo();
+    return;
+  }
 
   const videoId = getVideoId();
-  if (!videoId) return;
+  if (!videoId) {
+    removeExistingMemo();
+    return;
+  }
 
   chrome.storage.local.get([videoId], (result) => {
     const data = result[videoId];
-    if (!data || !data.memos) return;
+    const memos = getNormalizedMemos(data);
 
-    /* 기본 메모 */
-    if (!shownBase) {
-      const base = data.memos.find(m => m.time === 0);
-      if (base) {
-        shownBase = true;
-        createBasePopup(base.text);
-      }
+    if (!memos.length) {
+      shownBase = false;
+      activeTimes = {};
+      removeExistingMemo();
+      return;
+    }
+
+    if (!shownBase && !closedByUser) {
+      ensurePopupForMemos(memos);
     }
 
     const currentTime = Math.floor(video.currentTime);
 
-    data.memos.forEach(m => {
+    memos.forEach(m => {
       if (m.time > 0) {
         const diff = Math.abs(m.time - currentTime);
-
         if (diff <= 1) {
           if (!activeTimes[m.time]) {
+            if (!popupBox && !closedByUser) {
+              ensurePopupForMemos(memos);
+            }
+
             activeTimes[m.time] = true;
             showTimeInsidePopup(`⏱ ${m.text}`);
           }
         } else {
-          // 구간 벗어나면 다시 초기화
           activeTimes[m.time] = false;
         }
       }
@@ -139,9 +189,6 @@ function checkMemos() {
 
 setInterval(checkMemos, 1000);
 
-/* ===========================
-   SPA 대응
-=========================== */
 let lastUrl = location.href;
 
 new MutationObserver(() => {
@@ -149,6 +196,8 @@ new MutationObserver(() => {
     lastUrl = location.href;
     shownBase = false;
     activeTimes = {};
+    closedByUser = false;
+    removeExistingMemo();
     setTimeout(checkMemos, 500);
   }
 }).observe(document, { subtree: true, childList: true });
