@@ -1,3 +1,10 @@
+if (window.__YT_MEMO_SCRIPT_LOADED__) {
+  // prevent duplicate listeners/intervals when content.js is injected again
+} else {
+  window.__YT_MEMO_SCRIPT_LOADED__ = true;
+
+const MEMO_DISPLAY_KEY = "__memoDisplayEnabled";
+
 function getVideoId() {
   const match = location.search.match(/[?&]v=([^&]+)/);
   return match ? match[1] : null;
@@ -6,15 +13,44 @@ function getVideoId() {
 function removeExistingMemo() {
   const existing = document.getElementById("yt-memo-box");
   if (existing) existing.remove();
+  popupBox = null;
+  timeContainer = null;
 }
 
 let popupBox = null;
 let timeContainer = null;
+let shownBase = false;
+let activeTimes = {};
+let closedByUser = false;
+let displayEnabled = true;
+let lastMouse = { x: 20, y: 20 };
 
-/* ===========================
-   기본 팝업 생성
-=========================== */
-function createBasePopup(baseText) {
+function isFullscreenMode() {
+  return Boolean(document.fullscreenElement);
+}
+
+function isNearViewportEdge() {
+  return (
+    lastMouse.x <= 4 ||
+    lastMouse.y <= 4 ||
+    lastMouse.x >= window.innerWidth - 4 ||
+    lastMouse.y >= window.innerHeight - 4
+  );
+}
+
+function syncPopupPosition() {
+  if (!popupBox) return;
+  popupBox.style.left = `${lastMouse.x + 4}px`;
+  popupBox.style.top = `${lastMouse.y + 4}px`;
+}
+
+function syncPopupVisibilityState() {
+  if (!popupBox) return;
+  const shouldHide = isFullscreenMode() || !displayEnabled || isNearViewportEdge() || closedByUser;
+  popupBox.style.opacity = shouldHide ? "0" : "1";
+}
+
+function createBasePopup() {
   removeExistingMemo();
 
   popupBox = document.createElement("div");
@@ -22,126 +58,188 @@ function createBasePopup(baseText) {
 
   Object.assign(popupBox.style, {
     position: "fixed",
-    top: "80px",
-    right: "20px",
-    background: "#111",
-    color: "#fff",
-    padding: "14px",
-    width: "260px",
-    borderRadius: "8px",
     zIndex: "99999",
-    boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-    fontSize: "14px"
+    fontSize: "13px",
+    pointerEvents: "none",
+    opacity: "0",
+    transition: "opacity 0.2s ease"
   });
 
-  /* 컨테이너1: 기본메모 */
-  const baseContainer = document.createElement("div");
-  baseContainer.innerHTML = `
-    <div style="font-weight:bold;margin-bottom:6px;">📌 Saved Memo</div>
-    <div style="margin-bottom:8px;">${baseText}</div>
-  `;
-
-  /* 컨테이너2: 시간메모 영역 */
   timeContainer = document.createElement("div");
   timeContainer.id = "yt-time-container";
-  timeContainer.style.marginTop = "8px";
-
-  const closeBtn = document.createElement("button");
-  closeBtn.innerText = "닫기";
-  closeBtn.style.marginTop = "8px";
-  closeBtn.onclick = () => popupBox.remove();
-
-  popupBox.appendChild(baseContainer);
   popupBox.appendChild(timeContainer);
-  popupBox.appendChild(closeBtn);
 
   document.body.appendChild(popupBox);
+  syncPopupPosition();
+  syncPopupVisibilityState();
 }
 
-/* ===========================
-   시간 메모 내부 표시 (3초)
-=========================== */
-function showTimeInsidePopup(text) {
+function renderMemoText(text, isMain = false) {
   if (!timeContainer) return;
 
   const item = document.createElement("div");
-  item.style.background = "#222";
-  item.style.padding = "6px";
-  item.style.marginTop = "6px";
-  item.style.borderRadius = "4px";
+  Object.assign(item.style, {
+    color: "#fff",
+    background: "rgba(0,0,0,0.8)",
+    padding: "6px 10px",
+    borderRadius: "4px",
+    width: "fit-content",
+    maxWidth: "260px",
+    marginTop: isMain ? "0" : "4px",
+    opacity: "0",
+    transition: "opacity 0.2s ease"
+  });
   item.innerText = text;
 
-  timeContainer.appendChild(item);
+  if (isMain) {
+    timeContainer.prepend(item);
+  } else {
+    timeContainer.appendChild(item);
+  }
+
+  requestAnimationFrame(() => {
+    item.style.opacity = "1";
+  });
 
   setTimeout(() => {
-    item.remove();
+    item.style.opacity = "0";
+    setTimeout(() => {
+      item.remove();
+      if (popupBox && timeContainer && timeContainer.childElementCount === 0) {
+        removeExistingMemo();
+      }
+    }, 200);
   }, 3000);
 }
 
-/* ===========================
-   GET_TIME 유지
-=========================== */
+function getNormalizedMemos(data) {
+  if (!data) return [];
+  if (Array.isArray(data.memos)) {
+    return data.memos.filter(m => m && typeof m.text === "string").map(m => ({
+      time: Number.isFinite(m.time) ? Math.max(0, Math.floor(m.time)) : 0,
+      text: m.text
+    }));
+  }
+  if (typeof data === "string" && data.trim()) {
+    return [{ time: 0, text: data.trim() }];
+  }
+  return [];
+}
+
+function ensurePopupForMemos(memos) {
+  if (!popupBox) {
+    shownBase = true;
+    createBasePopup();
+
+    const base = memos.find(m => m.time === 0);
+    if (base) {
+      renderMemoText(base.text, true);
+    }
+  }
+}
+
+function forceShowMemoPopup(videoId) {
+  chrome.storage.local.get([videoId], (result) => {
+    const memos = getNormalizedMemos(result[videoId]);
+    if (!memos.length) return;
+
+    closedByUser = false;
+    ensurePopupForMemos(memos);
+  });
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === "GET_TIME") {
     const video = document.querySelector("video");
-    if (video) {
-      sendResponse({ time: video.currentTime });
+    sendResponse({ time: video ? video.currentTime : 0 });
+    return;
+  }
+
+  if (request.type === "SHOW_MEMO_POPUP") {
+    const currentId = getVideoId();
+    const targetId = request.videoId || currentId;
+    if (currentId && targetId && currentId === targetId) {
+      forceShowMemoPopup(targetId);
     }
+    return;
+  }
+
+  if (request.type === "SEEK_TO") {
+    const video = document.querySelector("video");
+    if (!video) {
+      sendResponse({ ok: false });
+      return;
+    }
+
+    const nextTime = Number.isFinite(request.time) ? Math.max(0, request.time) : 0;
+    video.currentTime = nextTime;
+    video.play().catch(() => {});
+    sendResponse({ ok: true });
+    return;
+  }
+
+  if (request.type === "MEMO_VISIBILITY_CHANGED") {
+    displayEnabled = Boolean(request.enabled);
+    syncPopupVisibilityState();
   }
 });
 
-/* ===========================
-   재노출 가능 구조
-=========================== */
-
-let shownBase = false;
-let activeTimes = {}; // 핵심 변경점
-
 function checkMemos() {
   const video = document.querySelector("video");
-  if (!video) return;
+  if (!video) {
+    removeExistingMemo();
+    return;
+  }
 
   const videoId = getVideoId();
-  if (!videoId) return;
+  if (!videoId) {
+    removeExistingMemo();
+    return;
+  }
 
-  chrome.storage.local.get([videoId], (result) => {
-    const data = result[videoId];
-    if (!data || !data.memos) return;
+  chrome.storage.local.get([videoId, MEMO_DISPLAY_KEY], (result) => {
+    displayEnabled = result[MEMO_DISPLAY_KEY] !== false;
+    const memos = getNormalizedMemos(result[videoId]);
 
-    /* 기본 메모 */
-    if (!shownBase) {
-      const base = data.memos.find(m => m.time === 0);
-      if (base) {
-        shownBase = true;
-        createBasePopup(base.text);
-      }
+    if (!memos.length) {
+      shownBase = false;
+      activeTimes = {};
+      removeExistingMemo();
+      return;
     }
 
     const currentTime = Math.floor(video.currentTime);
+    const matchedTimeMemos = memos
+      .map((m, index) => ({ ...m, index }))
+      .filter(m => m.time > 0 && Math.abs(m.time - currentTime) <= 1);
 
-    data.memos.forEach(m => {
+    if (!popupBox && !closedByUser && matchedTimeMemos.length > 0) {
+      ensurePopupForMemos(memos);
+    }
+
+    memos.forEach((m, index) => {
       if (m.time > 0) {
-        const diff = Math.abs(m.time - currentTime);
+        const memoKey = `${m.time}-${index}`;
+        const isMatched = Math.abs(m.time - currentTime) <= 1;
 
-        if (diff <= 1) {
-          if (!activeTimes[m.time]) {
-            activeTimes[m.time] = true;
-            showTimeInsidePopup(`⏱ ${m.text}`);
+        if (isMatched) {
+          if (!activeTimes[memoKey]) {
+            activeTimes[memoKey] = true;
+            ensurePopupForMemos(memos);
+            renderMemoText(`⏱ ${m.text}`);
           }
         } else {
-          // 구간 벗어나면 다시 초기화
-          activeTimes[m.time] = false;
+          activeTimes[memoKey] = false;
         }
       }
     });
+
+    syncPopupVisibilityState();
   });
 }
 
 setInterval(checkMemos, 1000);
 
-/* ===========================
-   SPA 대응
-=========================== */
 let lastUrl = location.href;
 
 new MutationObserver(() => {
@@ -149,8 +247,22 @@ new MutationObserver(() => {
     lastUrl = location.href;
     shownBase = false;
     activeTimes = {};
+    closedByUser = false;
+    removeExistingMemo();
     setTimeout(checkMemos, 500);
   }
 }).observe(document, { subtree: true, childList: true });
 
+document.addEventListener("mousemove", (event) => {
+  lastMouse = { x: event.clientX, y: event.clientY };
+  syncPopupPosition();
+  syncPopupVisibilityState();
+});
+
+document.addEventListener("fullscreenchange", () => {
+  syncPopupVisibilityState();
+});
+
 checkMemos();
+
+}
