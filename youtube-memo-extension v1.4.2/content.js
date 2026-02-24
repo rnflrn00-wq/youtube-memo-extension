@@ -14,7 +14,7 @@ let shownBase = false;
 let activeTimes = {};
 let closedByUser = false;
 
-function createBasePopup(baseText) {
+function createBasePopup(baseText, titleText = "📌 Saved Memo") {
   removeExistingMemo();
 
   popupBox = document.createElement("div");
@@ -36,7 +36,7 @@ function createBasePopup(baseText) {
 
   const baseContainer = document.createElement("div");
   baseContainer.innerHTML = `
-    <div style="font-weight:bold;margin-bottom:6px;">📌 Saved Memo</div>
+    <div style="font-weight:bold;margin-bottom:6px;">${titleText}</div>
     <div style="margin-bottom:8px;">${baseText}</div>
   `;
 
@@ -90,16 +90,30 @@ function getNormalizedMemos(data) {
   return [];
 }
 
+
+function ensurePopupForMemos(memos) {
+  const base = memos.find(m => m.time === 0);
+  if (base) {
+    shownBase = true;
+    createBasePopup(base.text, "📌 Saved Memo");
+    return;
+  }
+
+  const firstTimeMemo = memos.find(m => m.time > 0);
+  if (firstTimeMemo) {
+    shownBase = true;
+    createBasePopup("기본 메모 없이 시간 메모만 등록된 영상입니다.", "⏱ Time Memo Only");
+  }
+}
+
 function forceShowMemoPopup(videoId) {
   chrome.storage.local.get([videoId], (result) => {
     const data = result[videoId];
     const memos = getNormalizedMemos(data);
-    const base = memos.find(m => m.time === 0);
-    if (!base) return;
+    if (!memos.length) return;
 
     closedByUser = false;
-    shownBase = true;
-    createBasePopup(base.text);
+    ensurePopupForMemos(memos);
   });
 }
 
@@ -148,11 +162,7 @@ function checkMemos() {
     }
 
     if (!shownBase && !closedByUser) {
-      const base = memos.find(m => m.time === 0);
-      if (base) {
-        shownBase = true;
-        createBasePopup(base.text);
-      }
+      ensurePopupForMemos(memos);
     }
 
     const currentTime = Math.floor(video.currentTime);
@@ -161,7 +171,11 @@ function checkMemos() {
       if (m.time > 0) {
         const diff = Math.abs(m.time - currentTime);
         if (diff <= 1) {
-          if (!activeTimes[m.time] && popupBox) {
+          if (!activeTimes[m.time]) {
+            if (!popupBox && !closedByUser) {
+              ensurePopupForMemos(memos);
+            }
+
             activeTimes[m.time] = true;
             showTimeInsidePopup(`⏱ ${m.text}`);
           }
