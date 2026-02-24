@@ -12,6 +12,24 @@ function formatTime(seconds) {
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
+function parseTimeInput(input, fallbackSeconds) {
+  const raw = String(input || "").trim();
+  if (!raw) return fallbackSeconds;
+
+  if (/^\d+$/.test(raw)) {
+    return Math.max(0, Number(raw));
+  }
+
+  const mmss = raw.match(/^(\d+):(\d{1,2})$/);
+  if (mmss) {
+    const m = Number(mmss[1]);
+    const s = Number(mmss[2]);
+    return Math.max(0, m * 60 + s);
+  }
+
+  return fallbackSeconds;
+}
+
 function normalizeMemoData(videoId, rawData) {
   if (rawData && typeof rawData === "object") {
     return {
@@ -51,7 +69,6 @@ function sendShowPopupMessage(tabId, videoId) {
     });
   }, 350);
 }
-
 
 function seekVideoInTab(tabId, time, fallbackUrl) {
   if (!tabId) return;
@@ -111,7 +128,6 @@ function smartOpenVideoAtTime(videoId, time) {
   });
 }
 
-
 function notifyActiveTabMemoVisibility(enabled) {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const tabId = tabs[0]?.id;
@@ -141,6 +157,7 @@ function initMemoVisibilityToggle() {
 
 let currentVideoId = null;
 let allData = {};
+let channelOpenState = {};
 
 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
   const url = tabs[0]?.url || "";
@@ -173,7 +190,7 @@ async function fetchVideoMeta(videoId) {
   }
 }
 
-function saveMemo(videoId, memoText, time) {
+function saveMemo(videoId, memoText, time, options = {}) {
   chrome.storage.local.get([videoId], async (result) => {
     let existing = normalizeMemoData(videoId, result[videoId]);
 
@@ -185,6 +202,10 @@ function saveMemo(videoId, memoText, time) {
         thumbnail: meta.thumbnail,
         memos: []
       };
+    }
+
+    if (options.replaceBase) {
+      existing.memos = existing.memos.filter(m => m.time !== 0);
     }
 
     existing.memos.push({
@@ -238,7 +259,21 @@ function withActiveYoutubeTab(callback) {
 document.getElementById("saveBaseMemoBtn").addEventListener("click", () => {
   const memoText = document.getElementById("memoInput").value.trim();
   if (!currentVideoId || !memoText) return;
-  saveMemo(currentVideoId, memoText, 0);
+
+  chrome.storage.local.get([currentVideoId], (result) => {
+    const existing = normalizeMemoData(currentVideoId, result[currentVideoId]);
+    const hasBase = existing && existing.memos.some(m => m.time === 0);
+
+    if (!hasBase) {
+      saveMemo(currentVideoId, memoText, 0);
+      return;
+    }
+
+    const shouldReplace = confirm('기존 기본 메모가 있습니다. 새 텍스트로 교체하시겠습니까?');
+    if (shouldReplace) {
+      saveMemo(currentVideoId, memoText, 0, { replaceBase: true });
+    }
+  });
 });
 
 document.getElementById("saveTimeBtn").addEventListener("click", () => {
@@ -291,12 +326,16 @@ document.getElementById("restoreInput").addEventListener("change", (event) => {
   reader.readAsText(file);
 });
 
-function updateMemo(videoId, memoIndex, nextText) {
+function updateMemo(videoId, memoIndex, nextText, nextTime) {
   chrome.storage.local.get([videoId], (result) => {
     const existing = normalizeMemoData(videoId, result[videoId]);
     if (!existing || !existing.memos[memoIndex]) return;
 
     existing.memos[memoIndex].text = nextText;
+    existing.memos[memoIndex].time = Number.isFinite(nextTime)
+      ? Math.max(0, Math.floor(nextTime))
+      : existing.memos[memoIndex].time;
+
     chrome.storage.local.set({ [videoId]: existing }, loadMemoList);
   });
 }
@@ -318,13 +357,13 @@ function groupedByChannel() {
 function loadMemoList() {
   chrome.storage.local.get(null, (data) => {
     allData = data;
-    renderList("");
+    renderList(document.getElementById("searchInput")?.value?.toLowerCase() || "");
   });
-}
+});
 
-function renderList(filterText) {
-  const list = document.getElementById("memoList");
-  list.innerHTML = "";
+document.getElementById("restoreInput").addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
 
   const grouped = groupedByChannel();
 
@@ -340,10 +379,24 @@ function renderList(filterText) {
 
       if (!videos.length) return;
 
-      const category = document.createElement("div");
-      category.className = "channel-category";
-      category.innerText = `📺 ${channelName}`;
-      list.appendChild(category);
+      const channelGroup = document.createElement("div");
+      channelGroup.className = "channel-group";
+
+      const toggle = document.createElement("button");
+      toggle.className = "channel-toggle";
+      toggle.innerText = `📺 ${channelName}`;
+
+      if (channelOpenState[channelName]) {
+        channelGroup.classList.add("open");
+      }
+
+      toggle.onclick = () => {
+        channelOpenState[channelName] = !channelGroup.classList.contains("open");
+        channelGroup.classList.toggle("open", channelOpenState[channelName]);
+      };
+
+      const content = document.createElement("div");
+      content.className = "channel-content";
 
       videos.forEach(({ videoId, title, thumbnail, memos }) => {
         const container = document.createElement("div");
@@ -372,7 +425,7 @@ function renderList(filterText) {
               e.stopPropagation();
               const nextText = prompt("메모 수정", m.text);
               if (!nextText || !nextText.trim()) return;
-              updateMemo(videoId, m.index, nextText.trim());
+              updateMemo(videoId, m.index, nextText.trim(), 0);
             };
 
             base.appendChild(edit);
@@ -406,7 +459,10 @@ function renderList(filterText) {
             e.stopPropagation();
             const nextText = prompt("메모 수정", m.text);
             if (!nextText || !nextText.trim()) return;
-            updateMemo(videoId, m.index, nextText.trim());
+
+            const timeRaw = prompt("시간 수정 (초 또는 mm:ss)", String(m.time));
+            const nextTime = parseTimeInput(timeRaw, m.time);
+            updateMemo(videoId, m.index, nextText.trim(), nextTime);
           };
 
           memoRow.appendChild(memo);
@@ -421,7 +477,9 @@ function renderList(filterText) {
         deleteBtn.innerText = "삭제";
         deleteBtn.onclick = (e) => {
           e.stopPropagation();
-          chrome.storage.local.remove(videoId, loadMemoList);
+          if (confirm("삭제하시겠습니까?")) {
+            chrome.storage.local.remove(videoId, loadMemoList);
+          }
         };
 
         container3.appendChild(deleteBtn);
@@ -430,8 +488,12 @@ function renderList(filterText) {
         container.appendChild(container2);
         container.appendChild(container3);
 
-        list.appendChild(container);
+        content.appendChild(container);
       });
+
+      channelGroup.appendChild(toggle);
+      channelGroup.appendChild(content);
+      list.appendChild(channelGroup);
     });
 }
 
